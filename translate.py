@@ -23,7 +23,10 @@ import time
 # === Configuração padrão ===
 SOURCE_LANG = 'en'
 TARGET_LANG = 'pt-br'
-DEFAULT_DELAY = 0.5
+DEFAULT_DELAY = 0.2  # Reduzido de 0.5s para 0.2s (otimização)
+
+# === Cache de traduções ===
+TRANSLATION_CACHE = {}  # Cache global para evitar re-traduzir duplicatas
 
 # === Regex ===
 SINGLE_QUOTE_RE = re.compile(
@@ -281,11 +284,33 @@ def translate_text(text, delay):
     return text
 
 
+def get_cached_translation(text, delay):
+    """
+    Função safe-words: Verifica cache antes de traduzir.
+    Se o texto já foi traduzido, retorna do cache (rápido).
+    Se não, traduz e salva no cache para próximas vezes.
+    """
+    # Normalizar chave (strip) para melhor matching
+    cache_key = text.strip()
+
+    # Verificar se já existe no cache
+    if cache_key in TRANSLATION_CACHE:
+        return TRANSLATION_CACHE[cache_key]
+
+    # Não existe: traduzir pela primeira vez
+    translated = translate_text(text, delay)
+
+    # Salvar no cache para próximas vezes
+    TRANSLATION_CACHE[cache_key] = translated
+
+    return translated
+
+
 # =============================================================================
 # Processamento de arquivos
 # =============================================================================
 
-def process_file(src_path, dst_path, dst_dir, delay):
+def process_file(src_path, dst_path, dst_dir, delay, debug=False):
     """Lê arquivo PHP, traduz valores de $msg_arr, escreve no destino."""
     with open(src_path, 'r', encoding='utf-8') as f:
         src_lines = f.readlines()
@@ -300,7 +325,7 @@ def process_file(src_path, dst_path, dst_dir, delay):
         start_line = len(existing)
         if start_line >= total_lines:
             print(f"  Pulando (já completo): {os.path.relpath(dst_path, dst_dir)}")
-            return
+            return 0
         print(f"  Resumindo da linha {start_line + 1}/{total_lines}")
     else:
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
@@ -325,11 +350,37 @@ def process_file(src_path, dst_path, dst_dir, delay):
                 raw_value = m.group(2)
                 suffix = m.group(3)
 
+                # Debug: mostrar primeiras 3 traduções
+                if debug and translated_count < 3:
+                    print(f"\n{'='*70}")
+                    print(f"🔬 DEBUG linha {i+1} - arquivo: {os.path.basename(src_path)}")
+                    print(f"{'='*70}")
+                    print(f"1. RAW VALUE:    {repr(raw_value[:70])}")
+
                 text = prepare_for_translation(raw_value, quote_char)
+                if debug and translated_count < 3:
+                    print(f"2. APÓS PREPARE: {repr(text[:70])}")
+
                 text, ph_map = protect_placeholders(text)
-                translated = translate_text(text, delay)
+                if debug and translated_count < 3:
+                    print(f"3. APÓS PROTECT: {repr(text[:70])}")
+                    if ph_map:
+                        print(f"   Placeholders: {ph_map}")
+
+                translated = get_cached_translation(text, delay)
+                if debug and translated_count < 3:
+                    print(f"4. APÓS TRANS:   {repr(translated[:70])}")
+
                 translated = restore_placeholders(translated, ph_map)
+                if debug and translated_count < 3:
+                    print(f"5. APÓS RESTORE: {repr(translated[:70])}")
+
                 translated = re_escape(translated, quote_char)
+                if debug and translated_count < 3:
+                    print(f"6. APÓS ESCAPE:  {repr(translated[:70])}")
+                    print(f"   Quote char: {repr(quote_char)}")
+                    print(f"   Contém \\': {translated.count(chr(92)+chr(39))}")
+                    print(f"{'='*70}\n")
 
                 out.write(prefix + translated + suffix + '\n')
                 translated_count += 1
@@ -344,6 +395,7 @@ def process_file(src_path, dst_path, dst_dir, delay):
             out.flush()
 
     print(f"  Concluído: {translated_count} strings traduzidas")
+    return translated_count
 
 
 # =============================================================================
@@ -614,6 +666,11 @@ Exemplos:
         default=DEFAULT_DELAY,
         help=f'Delay em segundos entre chamadas ao tradutor (padrão: {DEFAULT_DELAY})'
     )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Ativa modo debug: mostra cada etapa da tradução (primeiras 3 strings)'
+    )
 
     return parser.parse_args()
 
@@ -727,6 +784,7 @@ def main():
             sys.exit(0)
 
     file_count = 0
+    total_translated = 0
 
     for dirpath, dirnames, filenames in os.walk(src_dir):
         dirnames.sort()
@@ -740,10 +798,22 @@ def main():
 
             file_count += 1
             print(f"[{file_count}] {rel_path}")
-            process_file(src_path, dst_path, dst_dir, args.delay)
+            translated_count = process_file(src_path, dst_path, dst_dir, args.delay, debug=args.debug)
+            if translated_count:
+                total_translated += translated_count
             print()
 
     print(f"✅ Completo. {file_count} arquivos processados.")
+
+    # Estatísticas de cache
+    cache_size = len(TRANSLATION_CACHE)
+    cache_hits = total_translated - cache_size if total_translated > 0 else 0
+    if cache_size > 0:
+        hit_rate = (cache_hits / total_translated * 100) if total_translated > 0 else 0
+        print(f"\n💾 Cache de traduções:")
+        print(f"   - {total_translated} strings traduzidas no total")
+        print(f"   - {cache_size} traduções únicas no cache")
+        print(f"   - {cache_hits} reutilizações de cache ({hit_rate:.1f}% economia)")
 
     # Validar automaticamente após tradução
     print("\n" + "="*60)

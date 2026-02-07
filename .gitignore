@@ -1,0 +1,36 @@
+# Minecraft/CurseForge (não faz parte do projeto)
+curseforge/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testes locais
+test_data/
+test_output/
+*.tmp
+
+# Backup files
+*.bak
+*.backup
+
+# Claude Code project files
+CLAUDE.md
+.claude/
