@@ -186,22 +186,52 @@ def install_trans():
     """Instala translate-shell automaticamente de acordo com o sistema."""
     pkg_name, install_cmd = detect_pkg_manager()
 
-    if not pkg_name:
-        print("ERRO: Não foi possível detectar o gerenciador de pacotes.")
-        print("Instale o translate-shell manualmente:")
-        print("  https://github.com/soimort/translate-shell")
-        sys.exit(1)
+    # Tentativa 1: Via gerenciador de pacotes
+    if pkg_name:
+        print(f"translate-shell não encontrado. Instalando via {pkg_name}...")
+        print(f"  Executando: {' '.join(install_cmd)}")
 
-    print(f"translate-shell não encontrado. Instalando via {pkg_name}...")
-    print(f"  Executando: {' '.join(install_cmd)}")
+        try:
+            subprocess.run(install_cmd, check=True)
+            print("✅ translate-shell instalado com sucesso!")
+            return
+        except subprocess.CalledProcessError:
+            print(f"⚠️  Falha ao instalar via {pkg_name}.")
+
+    # Tentativa 2: Download direto via wget (fallback)
+    print("\n💡 Tentando instalação alternativa via wget...")
 
     try:
-        subprocess.run(install_cmd, check=True)
-        print("translate-shell instalado com sucesso!")
-    except subprocess.CalledProcessError:
-        print(f"ERRO: Falha ao instalar via {pkg_name}.")
-        print("Tente instalar manualmente:")
-        print("  https://github.com/soimort/translate-shell")
+        # Verificar se wget está disponível
+        if not shutil.which('wget'):
+            print("❌ wget não encontrado. Não é possível instalar automaticamente.")
+            print("Instale manualmente:")
+            print("  curl -L git.io/trans > trans")
+            print("  chmod +x trans")
+            print("  sudo mv trans /usr/local/bin/")
+            sys.exit(1)
+
+        # Baixar translate-shell
+        print("📥 Baixando translate-shell de git.io/trans...")
+        subprocess.run(['wget', '-q', 'git.io/trans', '-O', '/tmp/trans'], check=True)
+
+        # Tornar executável
+        print("🔧 Configurando permissões...")
+        subprocess.run(['chmod', '+x', '/tmp/trans'], check=True)
+
+        # Mover para /usr/local/bin (requer sudo)
+        print("📦 Instalando em /usr/local/bin/ (pode pedir senha)...")
+        subprocess.run(['sudo', 'mv', '/tmp/trans', '/usr/local/bin/'], check=True)
+
+        print("✅ translate-shell instalado com sucesso via wget!")
+
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ ERRO: Falha na instalação automática.")
+        print("\nInstale manualmente:")
+        print("  wget git.io/trans")
+        print("  chmod +x trans")
+        print("  sudo mv trans /usr/local/bin/")
+        print("\nOu visite: https://github.com/soimort/translate-shell")
         sys.exit(1)
 
 
