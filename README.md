@@ -16,7 +16,7 @@ Ferramenta automática para traduzir arquivos de localização PHP do inglês pa
 
 ```bash
 # Clone ou baixe o script
-wget https://raw.githubusercontent.com/seu-repo/translate.py
+wget https://github.com/fcs7/trans-script-py.git
 chmod +x translate.py
 
 # OU copie para um diretório no PATH
