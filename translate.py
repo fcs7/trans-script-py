@@ -19,14 +19,12 @@ import shutil
 import subprocess
 import sys
 import time
+from multiprocessing import Manager, Pool, cpu_count
 
 # === Configuração padrão ===
 SOURCE_LANG = 'en'
 TARGET_LANG = 'pt-br'
 DEFAULT_DELAY = 0.2  # Reduzido de 0.5s para 0.2s (otimização)
-
-# === Cache de traduções ===
-TRANSLATION_CACHE = {}  # Cache global para evitar re-traduzir duplicatas
 
 # === Regex ===
 SINGLE_QUOTE_RE = re.compile(
@@ -284,24 +282,25 @@ def translate_text(text, delay):
     return text
 
 
-def get_cached_translation(text, delay):
+def get_cached_translation(text, delay, cache):
     """
     Função safe-words: Verifica cache antes de traduzir.
     Se o texto já foi traduzido, retorna do cache (rápido).
     Se não, traduz e salva no cache para próximas vezes.
+    Agora aceita cache como parâmetro para multiprocessing.
     """
     # Normalizar chave (strip) para melhor matching
     cache_key = text.strip()
 
     # Verificar se já existe no cache
-    if cache_key in TRANSLATION_CACHE:
-        return TRANSLATION_CACHE[cache_key]
+    if cache_key in cache:
+        return cache[cache_key]
 
     # Não existe: traduzir pela primeira vez
     translated = translate_text(text, delay)
 
     # Salvar no cache para próximas vezes
-    TRANSLATION_CACHE[cache_key] = translated
+    cache[cache_key] = translated
 
     return translated
 
@@ -310,7 +309,7 @@ def get_cached_translation(text, delay):
 # Processamento de arquivos
 # =============================================================================
 
-def process_file(src_path, dst_path, dst_dir, delay, debug=False):
+def process_file(src_path, dst_path, dst_dir, delay, cache, debug=False):
     """Lê arquivo PHP, traduz valores de $msg_arr, escreve no destino."""
     with open(src_path, 'r', encoding='utf-8') as f:
         src_lines = f.readlines()
@@ -367,7 +366,7 @@ def process_file(src_path, dst_path, dst_dir, delay, debug=False):
                     if ph_map:
                         print(f"   Placeholders: {ph_map}")
 
-                translated = get_cached_translation(text, delay)
+                translated = get_cached_translation(text, delay, cache)
                 if debug and translated_count < 3:
                     print(f"4. APÓS TRANS:   {repr(translated[:70])}")
 
@@ -675,6 +674,19 @@ Exemplos:
     return parser.parse_args()
 
 
+def process_file_wrapper(args_tuple):
+    """
+    Wrapper para process_file() compatível com Pool.map().
+    Desempacota tupla de argumentos e chama process_file().
+    """
+    src_path, dst_path, dst_dir, delay, cache, debug = args_tuple
+    try:
+        return process_file(src_path, dst_path, dst_dir, delay, cache, debug)
+    except Exception as e:
+        print(f"❌ ERRO ao processar {src_path}: {e}")
+        return 0
+
+
 def main():
     args = parse_args()
 
@@ -783,9 +795,16 @@ def main():
             print("❌ Operação cancelada.")
             sys.exit(0)
 
-    file_count = 0
-    total_translated = 0
+    # Criar cache compartilhado para multiprocessing
+    manager = Manager()
+    shared_cache = manager.dict()
 
+    # Determinar número de workers (3-4 ideal para não sobrecarregar Google Translate)
+    num_workers = min(4, max(2, cpu_count() - 1))
+    print(f"🚀 Usando {num_workers} workers paralelos\n")
+
+    # Coletar lista de arquivos para processar
+    file_tasks = []
     for dirpath, dirnames, filenames in os.walk(src_dir):
         dirnames.sort()
         for filename in sorted(filenames):
@@ -796,17 +815,26 @@ def main():
             rel_path = os.path.relpath(src_path, src_dir)
             dst_path = os.path.join(dst_dir, rel_path)
 
-            file_count += 1
-            print(f"[{file_count}] {rel_path}")
-            translated_count = process_file(src_path, dst_path, dst_dir, args.delay, debug=args.debug)
-            if translated_count:
-                total_translated += translated_count
-            print()
+            # Criar diretório de saída se não existe
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
-    print(f"✅ Completo. {file_count} arquivos processados.")
+            # Adicionar task (tupla de argumentos)
+            file_tasks.append((src_path, dst_path, dst_dir, args.delay, shared_cache, args.debug))
+
+    file_count = len(file_tasks)
+    print(f"📁 {file_count} arquivos PHP encontrados\n")
+
+    # Processar em paralelo
+    with Pool(processes=num_workers) as pool:
+        results = pool.map(process_file_wrapper, file_tasks)
+
+    # Somar resultados
+    total_translated = sum(r for r in results if r)
+
+    print(f"\n✅ Completo. {file_count} arquivos processados.")
 
     # Estatísticas de cache
-    cache_size = len(TRANSLATION_CACHE)
+    cache_size = len(shared_cache)
     cache_hits = total_translated - cache_size if total_translated > 0 else 0
     if cache_size > 0:
         hit_rate = (cache_hits / total_translated * 100) if total_translated > 0 else 0
